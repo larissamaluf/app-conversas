@@ -20,18 +20,23 @@ export async function POST(request: NextRequest) {
   if (dangerous.test(text)) return NextResponse.json(safetyAnswer(text));
   if (animal.test(text)) return NextResponse.json(animalAnswer(text));
   if (coercion.test(text)) return NextResponse.json(coercionAnswer());
-  const apiKey = process.env.OPENAI_API_KEY;
+  const gatewayToken = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
+  const apiKey = process.env.OPENAI_API_KEY || gatewayToken;
+  const gateway = !process.env.OPENAI_API_KEY && !!gatewayToken;
   if (apiKey) {
    try {
-    const response = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "gpt-4.1-mini", instructions: SYSTEM_PROMPT, input: JSON.stringify({ task: mode, user_content_untrusted: text, refinement: refine || null, previous_reply: previousReply || null }), text: { format: { type: "json_schema", name: "conversation_help", strict: true, schema: { type: "object", properties: { heading: { type: "string" }, reading: { type: "string" }, behind: { type: "string" }, friction: { type: "string" }, approach: { type: "string" }, tone: { type: "string" }, reception: { type: "string" }, risk: { type: "string" }, impulse: { type: "string" }, turn: { type: "string" }, reply: { type: "string" }, note: { type: "string" } }, required: ["heading","reading","behind","friction","approach","tone","reception","risk","impulse","turn","reply","note"], additionalProperties: false } } }, max_output_tokens: 900 }) });
+    const endpoint = gateway ? "https://ai-gateway.vercel.sh/v1/responses" : "https://api.openai.com/v1/responses";
+    const response = await fetch(endpoint, { method: "POST", headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: gateway ? "openai/gpt-4o-mini" : "gpt-4.1-mini", instructions: SYSTEM_PROMPT, input: JSON.stringify({ task: mode, user_content_untrusted: text, refinement: refine || null, previous_reply: previousReply || null }), text: { format: { type: "json_schema", name: "conversation_help", strict: true, schema: { type: "object", properties: { heading: { type: "string" }, reading: { type: "string" }, behind: { type: "string" }, friction: { type: "string" }, approach: { type: "string" }, tone: { type: "string" }, reception: { type: "string" }, risk: { type: "string" }, impulse: { type: "string" }, turn: { type: "string" }, reply: { type: "string" }, note: { type: "string" } }, required: ["heading","reading","behind","friction","approach","tone","reception","risk","impulse","turn","reply","note"], additionalProperties: false } } }, max_output_tokens: 900 }) });
     if (response.ok) {
      const data = await response.json() as { output?: Array<{ content?: Array<{ text?: string }> }> };
      const raw = data.output?.flatMap(x => x.content || []).map(x => x.text).find(Boolean);
-     if (raw) { const parsed = JSON.parse(raw); if (typeof parsed.reply === "string") return NextResponse.json(parsed); }
+     if (raw) { const parsed = JSON.parse(raw); if (typeof parsed.reply === "string") return NextResponse.json({ ...parsed, source: "ai" }); }
+    } else {
+     console.warn("AI provider returned status", response.status);
     }
    } catch { /* Give a useful privacy-preserving local fallback. */ }
   }
-  return NextResponse.json(fallback(mode!, text, refine, previousReply));
+  return NextResponse.json({ ...fallback(mode!, text, refine, previousReply), source: "fallback" });
  } catch { return NextResponse.json({ error: "Não foi possível analisar" }, { status: 400 }); }
 }
 function safetyAnswer(text: string) { return { heading: "Sua segurança vem primeiro.", reading: "Pelo que você contou, pode haver ameaça, coerção ou risco. Isso merece atenção além de uma conversa bem formulada.", behind: "Não dá para avaliar toda a situação por uma mensagem, mas seu receio merece ser levado a sério.", friction: "Confrontar a pessoa agora pode aumentar o risco. Você não precisa resolver isso sozinha.", approach: "Se estiver em perigo imediato, procure um lugar seguro e acione a emergência local. Se puder, fale com alguém de confiança ou um serviço de apoio.", reply: "Não me sinto segura para continuar essa conversa agora. Vou me afastar e buscar apoio.", note: "Use essa frase apenas se for seguro. Você pode priorizar distância e apoio sem responder.", tone: "", reception: "", risk: "", impulse: "", turn: "" }; }

@@ -1,0 +1,52 @@
+import { NextRequest, NextResponse } from "next/server";
+import { SYSTEM_PROMPT } from "./system-prompt";
+
+export const runtime = "nodejs";
+type Payload = { mode?: string; text?: string; refine?: string; previous?: Record<string, unknown> };
+const dangerous = /\b(me bateu|me agrediu|ameaçou|ameaça|vou te matar|vai me matar|arma|persegui|stalk|chantagem|me obriga|não me deixa sair|violência|violento|abus[oa]|medo de voltar|risco físico|parar de comprar comida|vai parar de comprar comida)\b/i;
+const animal = /\b(convenc|persuad|pression|forç|obrig|manipul|fazer.*(comer|ir|participar|comprar|usar)|levar.*(comer|ir|participar|comprar|usar))[^.?!]{0,100}\b(carne|churrasco|caça|pesca|rodeio|vaquejada|zoológico|circo|pele|animal|bicho)\b|\b(carne|churrasco|caça|pesca|rodeio|vaquejada|zoológico|circo|pele|animal|bicho)\b[^.?!]{0,100}\b(convenc|persuad|pression|forç|obrig|manipul)\b/i;
+const coercion = /\b(como (faço|posso) (pra|para) (manipular|chantagear|ameaçar|humilhar|controlar|enganar)|me ajude a (manipular|chantagear|ameaçar|humilhar|controlar|enganar)|explorar.*vulnerabilidade)\b/i;
+const clean = (s: string) => s.trim().slice(0, 5000);
+
+export async function POST(request: NextRequest) {
+ try {
+  const body = await request.json() as Payload;
+  const mode = body.mode;
+  const text = typeof body.text === "string" ? clean(body.text) : "";
+  if (!["story","draft","phrase"].includes(mode || "") || !text) return NextResponse.json({ error: "Dados inválidos" }, { status: 400 });
+  const refine = typeof body.refine === "string" ? body.refine.slice(0, 50) : "";
+  const previousReply = typeof body.previous?.reply === "string" ? body.previous.reply.slice(0, 1200) : "";
+  // Safety routing runs before generation. User text never becomes a system instruction.
+  if (dangerous.test(text)) return NextResponse.json(safetyAnswer(text));
+  if (animal.test(text)) return NextResponse.json(animalAnswer(text));
+  if (coercion.test(text)) return NextResponse.json(coercionAnswer());
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (apiKey) {
+   try {
+    const response = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "gpt-4.1-mini", instructions: SYSTEM_PROMPT, input: JSON.stringify({ task: mode, user_content_untrusted: text, refinement: refine || null, previous_reply: previousReply || null }), text: { format: { type: "json_schema", name: "conversation_help", strict: true, schema: { type: "object", properties: { heading: { type: "string" }, reading: { type: "string" }, behind: { type: "string" }, friction: { type: "string" }, approach: { type: "string" }, tone: { type: "string" }, reception: { type: "string" }, risk: { type: "string" }, impulse: { type: "string" }, turn: { type: "string" }, reply: { type: "string" }, note: { type: "string" } }, required: ["heading","reading","behind","friction","approach","tone","reception","risk","impulse","turn","reply","note"], additionalProperties: false } } }, max_output_tokens: 900 }) });
+    if (response.ok) {
+     const data = await response.json() as { output?: Array<{ content?: Array<{ text?: string }> }> };
+     const raw = data.output?.flatMap(x => x.content || []).map(x => x.text).find(Boolean);
+     if (raw) { const parsed = JSON.parse(raw); if (typeof parsed.reply === "string") return NextResponse.json(parsed); }
+    }
+   } catch { /* Give a useful privacy-preserving local fallback. */ }
+  }
+  return NextResponse.json(fallback(mode!, text, refine, previousReply));
+ } catch { return NextResponse.json({ error: "Não foi possível analisar" }, { status: 400 }); }
+}
+function safetyAnswer(text: string) { return { heading: "Sua segurança vem primeiro.", reading: "Pelo que você contou, pode haver ameaça, coerção ou risco. Isso merece atenção além de uma conversa bem formulada.", behind: "Não dá para avaliar toda a situação por uma mensagem, mas seu receio merece ser levado a sério.", friction: "Confrontar a pessoa agora pode aumentar o risco. Você não precisa resolver isso sozinha.", approach: "Se estiver em perigo imediato, procure um lugar seguro e acione a emergência local. Se puder, fale com alguém de confiança ou um serviço de apoio.", reply: "Não me sinto segura para continuar essa conversa agora. Vou me afastar e buscar apoio.", note: "Use essa frase apenas se for seguro. Você pode priorizar distância e apoio sem responder.", tone: "", reception: "", risk: "", impulse: "", turn: "" }; }
+function animalAnswer(text: string) { return { heading: "Vamos cuidar da relação sem pressionar.", note: "Posso ajudar com essa conversa, mas não vou criar argumentos para incentivar uma prática que envolve exploração animal ou pressionar alguém a participar dela.", reading: "Parece haver um desejo de estar junto, junto com uma diferença importante de valores e limites.", behind: "A presença da pessoa pode importar para você; a escolha dela também merece respeito.", friction: "Insistir para que ela abra mão do limite tende a fechar a conversa.", approach: "Convide para pensar numa forma de encontro que respeite a escolha dela.", reply: "Sua presença é importante para mim. Como a gente pode fazer esse encontro funcionar de um jeito em que você também se sinta respeitada?", tone: "", reception: "", risk: "", impulse: "", turn: "" }; }
+function coercionAnswer() { return { heading: "Dá para buscar clareza sem controlar.", note: "Não vou ajudar a manipular, ameaçar ou explorar alguém. Posso ajudar você a dizer o que precisa com honestidade e respeito.", reading: "Há uma necessidade de ser ouvido, mas controlar a reação da outra pessoa não ajuda a construir diálogo.", behind: "Talvez exista frustração ou medo de perder espaço nessa conversa.", friction: "Pressão e ameaça podem tornar a conversa menos segura.", approach: "Fale de você, do seu limite e de um pedido possível.", reply: "Quero conversar sobre isso com calma. Posso dizer o que preciso e também ouvir como você vê a situação?", tone: "", reception: "", risk: "", impulse: "", turn: "" }; }
+function fallback(mode: string, text: string, refine: string, previousReply: string) {
+ const lower = text.toLowerCase();
+ const family = /\b(pai|mãe|filha|filho|família|irmã|irmão)\b/.test(lower);
+ const work = /\b(chefe|trabalho|colega|reunião)\b/.test(lower);
+ const vegan = /\b(vegan|carne|animal|churrasco|plantas|leão|anêmic)\b/.test(lower);
+ const need = family ? "o vínculo e o respeito dentro da família" : work ? "respeito e segurança no trabalho" : "ser ouvida e respeitada";
+ let reply = mode === "draft" ? "Quero falar sobre o que aconteceu. Do jeito que foi, eu me senti desconfortável. Podemos conversar com calma e pensar em como fazer diferente?" : vegan ? "Entendo que a gente veja isso de formas diferentes. Para mim, respeitar os animais é importante. Você topa me ouvir antes de a gente continuar?" : work ? "Queria conversar sobre o que aconteceu. A forma como você falou comigo me deixou desconfortável. Podemos tratar disso de um jeito mais respeitoso?" : family ? "Eu sei que isso importa para você. Para mim também é importante ser ouvida nessa decisão. Podemos conversar sem pressão?" : "Quero te contar como isso bateu em mim. Podemos conversar com calma e tentar entender o que cada um precisa?";
+ if (mode === "phrase") reply = phraseReply(text);
+ if (refine) reply = refineReply(previousReply || reply, refine);
+ return { heading: mode === "draft" ? "Antes de apertar enviar…" : mode === "phrase" ? "Dá para virar essa conversa." : "Vamos por partes.", reading: "Pelo que você contou, há uma diferença de expectativas e um ponto importante para você que não parece estar sendo escutado.", behind: `Talvez exista uma preocupação dos dois lados. Do seu, parece importante preservar ${need}; sobre a outra pessoa, vale perguntar antes de concluir.`, friction: "Acusações, generalizações ou tentar vencer a conversa podem fazer a outra pessoa se defender em vez de escutar.", approach: "Comece pelo que aconteceu, diga por que isso importa para você e faça um pedido concreto, sem abrir mão do seu limite.", tone: "A mensagem mostra que isso te afetou. Algumas palavras podem soar como acusação, mesmo que sua intenção seja ser compreendida.", reception: "A outra pessoa pode perceber a mensagem como cobrança e responder na defensiva. Não dá para prever a reação dela.", risk: "Palavras como “sempre” e “nunca”, ironia e julgamentos podem desviar o foco do que você precisa.", impulse: "Dá vontade de rebater na hora e mostrar por que a frase não faz sentido.", turn: "Em vez de disputar quem ganha, pergunte o que a pessoa quis dizer e marque seu ponto com clareza.", reply, note: "" };
+}
+function phraseReply(text: string) { const p=text.toLowerCase(); if(p.includes("plantas"))return "Entendo a pergunta. O que me importa aqui é reduzir o sofrimento animal. Se você quiser, posso te contar por que fiz essa escolha."; if(p.includes("leão"))return "Leões vivem de outro jeito. Eu consigo escolher o que coloco no prato, e escolhi evitar causar sofrimento aos animais."; if(p.includes("anêmica"))return "Vale cuidar da saúde, claro. Eu acompanho minha alimentação e prefiro conversar sobre isso sem presumir que minha escolha me faz mal."; if(p.includes("impõe"))return "Também não gosto de ser pressionada. Posso explicar o que é importante para mim sem pedir que você concorde agora?"; if(p.includes("pedacinho"))return "Não, obrigada. Para mim não é só uma preferência de sabor. Fico feliz em estar aqui com vocês, comendo outra coisa."; if(p.includes("tudo tem"))return "Não precisa ser tudo igual para todo mundo. Eu só queria uma opção que respeite minha escolha."; return "Eu me importo com pessoas e animais. Uma preocupação não precisa apagar a outra. O que nessa escolha te incomoda mais?"; }
+function refineReply(reply: string, kind: string) { const core=reply.replace(/[.!?]+$/,""); if(kind==="Mais curta")return core.split(/[,.]/)[0]+"."; if(kind==="Mais direta")return "Quero ser clara: "+core.charAt(0).toLowerCase()+core.slice(1)+"."; if(kind==="Mais carinhosa")return "Eu gosto da nossa relação e quero cuidar dela. "+reply; if(kind==="Com humor")return "Prometo que não vim com um PowerPoint. "+reply; if(kind==="Quero colocar um limite")return core+". Se isso não for respeitado, prefiro encerrar a conversa por agora."; return "Quero tentar de outro jeito: "+reply; }

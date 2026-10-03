@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
   if (dangerous.test(text)) return NextResponse.json(safetyAnswer(text));
   if (animal.test(text)) return NextResponse.json(animalAnswer(text));
   if (coercion.test(text)) return NextResponse.json(coercionAnswer());
-  const gatewayToken = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
+  const gatewayToken = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN || request.headers.get("x-vercel-oidc-token");
   const apiKey = process.env.OPENAI_API_KEY || gatewayToken;
   const gateway = !process.env.OPENAI_API_KEY && !!gatewayToken;
   if (apiKey) {
